@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+api/node_modules/
+mobile/node_modules/
+
+# Env files
+.env
+.env.local
+.env.*
+api/.env
+mobile/.env
+
+# Build outputs
+dist/
+api/dist/
+mobile/dist/
+mobile/android/
+mobile/ios/
+*.apk
+*.aab
+
+# Expo/React Native
+.expo/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
