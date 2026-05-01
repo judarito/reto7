@@ -1,6 +1,8 @@
 import * as admin from 'firebase-admin';
+import { Expo } from 'expo-server-sdk';
 
 let firebaseInitialized = false;
+const expo = new Expo();
 
 function initFirebase() {
   if (firebaseInitialized) return;
@@ -63,4 +65,31 @@ export async function sendFCMNotification(
     console.error('FCM send error:', e);
     return false;
   }
+}
+
+export async function sendPushNotification(
+  pushToken: string,
+  title: string,
+  body: string,
+  data?: Record<string, string>
+): Promise<boolean> {
+  if (Expo.isExpoPushToken(pushToken)) {
+    try {
+      await expo.sendPushNotificationsAsync([
+        {
+          to: pushToken,
+          title,
+          body,
+          data: data ?? {},
+          sound: 'default',
+        },
+      ]);
+      return true;
+    } catch (e) {
+      console.error('Expo push send error:', e);
+      return false;
+    }
+  }
+
+  return sendFCMNotification(pushToken, title, body, data);
 }

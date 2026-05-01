@@ -1,17 +1,49 @@
 import { useState, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, SafeAreaView, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
-import { API_URL } from '../../constants/api';
+import { API_URL, ApiTimeoutError, fetchWithRetry } from '../../constants/api';
 import { getToken, authHeaders } from '../../constants/auth';
+import { setCurrentChallengeId } from '../../constants/challenge';
+import { HeaderActionButton } from '../../components/HeaderActionButton';
+import { TabScreen } from '../../components/TabScreen';
 import { Toast } from '../../components/Toast';
+import { TabScrollView } from '../../components/TabScrollView';
+import { usePendingAction } from '../../hooks/usePendingAction';
+
+interface ActiveParticipant {
+  id: number;
+  username: string;
+}
+
+interface GlobalChallenge {
+  id: number;
+  title: string;
+  description: string | null;
+  durationDays: number;
+  isPremium: boolean;
+  price: number;
+  evidenceDescription: string | null;
+  challengeType: string;
+  challengeIcon: string;
+  challengeLabel: string;
+  activeParticipantsCount: number;
+  activeParticipants: ActiveParticipant[];
+  daysUntilStart?: number;
+  startsAt?: string;
+  endsAt?: string;
+  creatorUsername?: string | null;
+}
 
 export default function ExploreScreen() {
-  const [challenges, setChallenges] = useState<any[]>([]);
+  const [challenges, setChallenges] = useState<GlobalChallenge[]>([]);
+  const [upcomingChallenges, setUpcomingChallenges] = useState<GlobalChallenge[]>([]);
   const [loading, setLoading] = useState(true);
   const [joiningId, setJoiningId] = useState<number | null>(null);
   const [joinedIds, setJoinedIds] = useState<Set<number>>(new Set());
   const [inviteCode, setInviteCode] = useState('');
   const [joiningByCode, setJoiningByCode] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const { isPending: openingCreate, runPendingAction: runCreateNavigation } = usePendingAction();
 
   // Toast state
   const [toast, setToast] = useState({ visible: false, message: '', type: 'success' as 'success' | 'error' });
@@ -30,14 +62,25 @@ export default function ExploreScreen() {
   const fetchChallenges = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/challenges/global`);
-      const data = await res.json();
-      if (res.ok) setChallenges(data);
+      setErrorMessage(null);
+      const [globalRes, upcomingRes] = await Promise.all([
+        fetchWithRetry(`${API_URL}/challenges/global`),
+        fetchWithRetry(`${API_URL}/challenges/upcoming`),
+      ]);
+      if (globalRes.ok) setChallenges(await globalRes.json());
+      if (upcomingRes.ok) setUpcomingChallenges(await upcomingRes.json());
     } catch (e) {
       console.error(e);
+      setErrorMessage(e instanceof ApiTimeoutError ? e.message : 'No se pudieron cargar los retos.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const formatPrice = (price: number) => {
+    if (price <= 0) return 'Gratis';
+    if (price < 10) return `$${price.toFixed(2)} USD`;
+    return `$${(price / 100).toFixed(2)} USD`;
   };
 
   const handleJoinByCode = async () => {
@@ -56,11 +99,14 @@ export default function ExploreScreen() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Código inválido');
 
+      if (data.challengeId) {
+        await setCurrentChallengeId(data.challengeId);
+      }
       setInviteCode('');
       showToast('¡Te uniste al reto privado! 🎉');
       setTimeout(() => router.push('/(tabs)/dashboard'), 1500);
-    } catch (e: any) {
-      showToast(e.message, 'error');
+    } catch (e: unknown) {
+      showToast(e instanceof Error ? e.message : 'Error al unirse por código', 'error');
     } finally {
       setJoiningByCode(false);
     }
@@ -91,34 +137,44 @@ export default function ExploreScreen() {
       }
 
       // Mark as joined locally so button changes immediately
+      await setCurrentChallengeId(challengeId);
       setJoinedIds(prev => new Set([...prev, challengeId]));
       showToast('¡Te uniste al reto! 🔥');
       setTimeout(() => router.push('/(tabs)/dashboard'), 1500);
-    } catch (e: any) {
-      showToast(e.message, 'error');
+    } catch (e: unknown) {
+      showToast(e instanceof Error ? e.message : 'Error al unirse al reto', 'error');
     } finally {
       setJoiningId(null);
     }
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-background">
+    <TabScreen>
       {/* Toast */}
       <Toast visible={toast.visible} message={toast.message} type={toast.type} />
 
-      <View className="px-6 pt-6 pb-4 border-b border-[#222] flex-row justify-between items-center">
-        <Text className="text-white text-2xl font-black tracking-widest uppercase">
-          Explorar <Text className="text-neonGreen">Retos</Text>
-        </Text>
-        <TouchableOpacity onPress={() => router.push('/create-challenge')}>
-          <View className="bg-neonGreen/20 px-3 py-2 rounded-full border border-neonGreen/50 flex-row items-center">
-            <Text className="text-neonGreen font-bold mr-1">+</Text>
-            <Text className="text-neonGreen font-bold text-xs uppercase tracking-wider">Crear</Text>
+      <View className="px-6 pt-6 pb-4 border-b border-[#222]" style={{ zIndex: 20, elevation: 6 }}>
+        <View className="flex-row items-center" style={{ minHeight: 52 }}>
+          <View style={{ flex: 1, paddingRight: 12 }}>
+            <Text className="text-white text-2xl font-black tracking-widest uppercase" numberOfLines={1}>
+              Explorar <Text className="text-neonGreen">Retos</Text>
+            </Text>
           </View>
-        </TouchableOpacity>
+          <View style={{ width: 92, alignItems: 'flex-end' }}>
+            <HeaderActionButton
+              onPress={() => void runCreateNavigation(() => router.push('/create-challenge'))}
+              disabled={openingCreate}
+              loading={openingCreate}
+              icon="+"
+              label="Crear"
+              variant="pill"
+              accent="green"
+            />
+          </View>
+        </View>
       </View>
 
-      <ScrollView className="flex-1 px-6 pt-6">
+      <TabScrollView className="flex-1 px-6 pt-6">
         
         {/* Join by Code */}
         <View className="bg-[#1A1A1A] p-4 rounded-2xl border border-white/10 mb-8">
@@ -150,22 +206,66 @@ export default function ExploreScreen() {
           </View>
         </View>
 
+        {/* Upcoming Challenges */}
+        {upcomingChallenges.length > 0 && (
+          <View className="mb-8">
+            <Text className="text-gray-400 text-sm font-bold tracking-widest uppercase mb-4 flex-row items-center">
+              ⏳ Próximamente
+            </Text>
+            {upcomingChallenges.slice(0, 3).map((challenge) => (
+              <View key={challenge.id} className="bg-[#1A1A1A] rounded-2xl p-4 border border-neonOrange/20 mb-3">
+                <View className="flex-row justify-between items-center mb-2">
+                  <Text className="text-white font-bold">{challenge.title}</Text>
+                  <Text className="text-neonOrange text-xs font-bold">
+                    En {challenge.daysUntilStart} día{(challenge as any).daysUntilStart !== 1 ? 's' : ''}
+                  </Text>
+                </View>
+                <View className="flex-row items-center">
+                  <View className="bg-white/5 border border-white/10 px-3 py-1 rounded-full mr-2">
+                    <Text className="text-gray-200 text-[10px] font-bold uppercase tracking-widest">
+                      {challenge.challengeIcon} {challenge.challengeLabel}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
         <Text className="text-gray-400 text-sm font-bold tracking-widest uppercase mb-4">Retos Globales</Text>
 
         {loading ? (
           <ActivityIndicator color="#39FF14" size="large" style={{ marginTop: 40 }} />
         ) : challenges.length === 0 ? (
-          <Text className="text-gray-400 text-center mt-10">No hay retos disponibles.</Text>
+          <View className="items-center mt-10">
+            <Text className="text-gray-400 text-center">{errorMessage ?? 'No hay retos disponibles.'}</Text>
+            {errorMessage ? (
+              <TouchableOpacity className="mt-4" onPress={fetchChallenges}>
+                <View className="bg-neonOrange/20 border border-neonOrange/50 px-5 py-3 rounded-xl">
+                  <Text className="text-neonOrange font-black uppercase tracking-widest">Reintentar</Text>
+                </View>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         ) : (
           <View>
             {challenges.map((challenge) => {
               const alreadyJoined = joinedIds.has(challenge.id);
               const isJoiningThis = joiningId === challenge.id;
+              const activeParticipants = Array.isArray(challenge.activeParticipants) ? challenge.activeParticipants : [];
+              const activeParticipantsCount = typeof challenge.activeParticipantsCount === 'number'
+                ? challenge.activeParticipantsCount
+                : activeParticipants.length;
 
               return (
                 <View key={challenge.id} className="bg-[#1A1A1A] rounded-3xl p-5 border border-white/5 mb-4">
                   <View className="flex-row justify-between items-start mb-2">
-                    <Text className="text-white text-xl font-bold flex-1">{challenge.title}</Text>
+                    <View className="flex-1">
+                      <Text className="text-white text-xl font-bold">{challenge.title}</Text>
+                      {challenge.creatorUsername ? (
+                        <Text className="text-gray-500 text-[11px] mt-1">Creado por @{challenge.creatorUsername}</Text>
+                      ) : null}
+                    </View>
                     {challenge.isPremium && (
                       <View className="bg-neonOrange/20 px-2 py-1 rounded border border-neonOrange/50 ml-2">
                         <Text className="text-neonOrange text-[10px] font-bold">PREMIUM</Text>
@@ -176,6 +276,14 @@ export default function ExploreScreen() {
                   {challenge.description ? (
                     <Text className="text-gray-400 text-sm mb-3">{challenge.description}</Text>
                   ) : null}
+
+                  <View className="mb-3 flex-row items-center">
+                    <View className="bg-white/5 border border-white/10 px-3 py-1 rounded-full mr-2">
+                      <Text className="text-gray-200 text-[10px] font-bold uppercase tracking-widest">
+                        {challenge.challengeIcon} {challenge.challengeLabel}
+                      </Text>
+                    </View>
+                  </View>
 
                   {/* Evidence required badge */}
                   {challenge.evidenceDescription ? (
@@ -205,7 +313,34 @@ export default function ExploreScreen() {
                       <Text className="text-gray-300 font-medium">{challenge.durationDays} Días</Text>
                     </View>
                     {challenge.isPremium && (
-                      <Text className="text-neonOrange font-bold">${challenge.price} USD</Text>
+                      <Text className="text-neonOrange font-bold">{formatPrice(challenge.price)}</Text>
+                    )}
+                  </View>
+
+                  <View className="bg-white/5 border border-white/10 rounded-2xl px-4 py-3 mb-4">
+                    <Text className="text-gray-400 text-[10px] font-bold uppercase tracking-widest mb-2">
+                      Participantes Activos
+                    </Text>
+                    <Text className="text-white text-base font-black mb-2">
+                      {activeParticipantsCount} {activeParticipantsCount === 1 ? 'persona' : 'personas'} haciendolo ahora
+                    </Text>
+                    {activeParticipants.length > 0 ? (
+                      <View className="flex-row flex-wrap">
+                        {activeParticipants.map((participant: { id: number; username: string }) => (
+                          <View
+                            key={participant.id}
+                            className="bg-neonGreen/10 border border-neonGreen/20 rounded-full px-3 py-1 mr-2 mb-2"
+                          >
+                            <Text className="text-neonGreen text-[11px] font-bold">
+                              @{participant.username}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    ) : (
+                      <Text className="text-gray-500 text-sm">
+                        Sé la primera persona en unirte a este reto.
+                      </Text>
                     )}
                   </View>
 
@@ -233,8 +368,7 @@ export default function ExploreScreen() {
             })}
           </View>
         )}
-        <View className="h-10" />
-      </ScrollView>
-    </SafeAreaView>
+      </TabScrollView>
+    </TabScreen>
   );
 }

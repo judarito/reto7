@@ -1,11 +1,14 @@
 import { useState, useCallback } from 'react';
 import {
-  View, Text, ScrollView, SafeAreaView, TouchableOpacity,
+  View, Text, TouchableOpacity,
   ActivityIndicator, RefreshControl,
 } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { API_URL } from '../../constants/api';
 import { getToken, authHeaders } from '../../constants/auth';
+import { decrementUnreadCount, setUnreadCount as setGlobalUnreadCount } from '../../constants/notifications';
+import { TabScreen } from '../../components/TabScreen';
+import { TabScrollView } from '../../components/TabScrollView';
 
 interface Notification {
   id: number;
@@ -14,6 +17,7 @@ interface Notification {
   body: string;
   isRead: boolean;
   createdAt: string;
+  data?: string | null;
 }
 
 const TYPE_CONFIG: Record<string, { icon: string; accent: string }> = {
@@ -60,32 +64,52 @@ export default function NotificationsScreen() {
       const data = await res.json();
       setNotifications(data.notifications ?? []);
       setUnreadCount(data.unreadCount ?? 0);
-    } catch (e) {
-      console.error(e);
+      await setGlobalUnreadCount(data.unreadCount ?? 0);
+    } catch (error) {
+      console.error(error);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  const markAsRead = async (id: number) => {
-    setNotifications(prev =>
-      prev.map(n => n.id === id ? { ...n, isRead: true } : n)
-    );
-    setUnreadCount(prev => Math.max(0, prev - 1));
+  const handleNotificationPress = async (notification: Notification) => {
+    if (!notification.isRead) {
+      setNotifications((prev) =>
+        prev.map((item) => item.id === notification.id ? { ...item, isRead: true } : item)
+      );
+      setUnreadCount((prev) => Math.max(0, prev - 1));
+      await decrementUnreadCount();
+
+      try {
+        const token = await getToken();
+        if (token) {
+          await fetch(`${API_URL}/notifications/${notification.id}/read`, {
+            method: 'PATCH',
+            headers: authHeaders(token),
+          });
+        }
+      } catch {
+        // Keep optimistic UI state.
+      }
+    }
+
+    if (!notification.data) return;
+
     try {
-      const token = await getToken();
-      if (!token) return;
-      await fetch(`${API_URL}/notifications/${id}/read`, {
-        method: 'PATCH',
-        headers: authHeaders(token),
-      });
-    } catch (e) { /* silent */ }
+      const parsed = JSON.parse(notification.data) as { challengeId?: string | number };
+      if (parsed?.challengeId) {
+        router.push(`/challenge/${parsed.challengeId}/leaderboard`);
+      }
+    } catch {
+      // Ignore malformed data payloads.
+    }
   };
 
   const markAllAsRead = async () => {
     setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
     setUnreadCount(0);
+    await setGlobalUnreadCount(0);
     try {
       const token = await getToken();
       if (!token) return;
@@ -93,11 +117,11 @@ export default function NotificationsScreen() {
         method: 'PATCH',
         headers: authHeaders(token),
       });
-    } catch (e) { /* silent */ }
+    } catch { /* silent */ }
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#121212' }}>
+    <TabScreen style={{ backgroundColor: '#121212' }}>
       {/* Header */}
       <View style={{
         flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -129,7 +153,7 @@ export default function NotificationsScreen() {
           <ActivityIndicator size="large" color="#39FF14" />
         </View>
       ) : (
-        <ScrollView
+        <TabScrollView
           style={{ flex: 1 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadNotifications(true)} tintColor="#39FF14" />}
         >
@@ -148,7 +172,7 @@ export default function NotificationsScreen() {
                 return (
                   <TouchableOpacity
                     key={notif.id}
-                    onPress={() => !notif.isRead && markAsRead(notif.id)}
+                    onPress={() => void handleNotificationPress(notif)}
                     activeOpacity={0.8}
                   >
                     <View style={{
@@ -201,9 +225,8 @@ export default function NotificationsScreen() {
               })}
             </View>
           )}
-          <View style={{ height: 40 }} />
-        </ScrollView>
+        </TabScrollView>
       )}
-    </SafeAreaView>
+    </TabScreen>
   );
 }

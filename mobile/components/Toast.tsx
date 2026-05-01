@@ -23,7 +23,7 @@ export function Toast({ message, type = 'success', visible }: ToastProps) {
         Animated.timing(translateY, { toValue: -20, duration: 200, useNativeDriver: true }),
       ]).start();
     }
-  }, [visible]);
+  }, [visible, opacity, translateY]);
 
   const bgColor = type === 'success' ? '#39FF14' : type === 'error' ? '#FF5F1F' : '#444';
   const textColor = type === 'success' ? '#000' : '#fff';

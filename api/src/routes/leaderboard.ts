@@ -3,10 +3,13 @@ import { db } from '../db';
 import { users, userChallenges } from '../db/schema';
 import { eq, desc, and } from 'drizzle-orm';
 import { authenticateToken } from '../middleware/auth';
+import { validateParams } from '../middleware/validate';
+import { z } from 'zod';
 
 const router = Router();
+const challengeIdSchema = z.object({ challenge_id: z.coerce.number().int().positive() });
 
-router.get('/:challenge_id', authenticateToken, async (req, res) => {
+router.get('/:challenge_id', authenticateToken, validateParams(challengeIdSchema), async (req, res) => {
   try {
     const challengeId = parseInt(req.params.challenge_id as string, 10);
 

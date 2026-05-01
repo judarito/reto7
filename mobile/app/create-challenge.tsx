@@ -1,18 +1,25 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, SafeAreaView, ActivityIndicator, Switch, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Switch, ScrollView } from 'react-native';
 import { router } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { API_URL } from '../constants/api';
 import { getToken, authHeaders } from '../constants/auth';
+import { setCurrentChallengeId } from '../constants/challenge';
+import { HeaderActionButton } from '../components/HeaderActionButton';
 import { Toast } from '../components/Toast';
+import { usePendingAction } from '../hooks/usePendingAction';
 
 export default function CreateChallengeScreen() {
   const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
   const [duration, setDuration] = useState('30');
   const [isPrivate, setIsPrivate] = useState(false);
   const [evidenceDescription, setEvidenceDescription] = useState('');
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
   const [createdCode, setCreatedCode] = useState<string | null>(null);
+  const [validationWarning, setValidationWarning] = useState<string | null>(null);
+  const { isPending: leavingScreen, runPendingAction: runLeavingAction } = usePendingAction();
 
   const [toast, setToast] = useState({ visible: false, message: '', type: 'success' as 'success' | 'error' });
 
@@ -28,6 +35,7 @@ export default function CreateChallengeScreen() {
     }
 
     setLoading(true);
+    setValidationWarning(null);
     try {
       const token = await getToken();
       if (!token) { router.replace('/'); return; }
@@ -37,6 +45,7 @@ export default function CreateChallengeScreen() {
         headers: authHeaders(token),
         body: JSON.stringify({
           title: title.trim(),
+          description: description.trim() || null,
           durationDays: parseInt(duration.trim(), 10),
           isPrivate,
           evidenceDescription: evidenceDescription.trim() || null,
@@ -44,9 +53,19 @@ export default function CreateChallengeScreen() {
       });
 
       const data = await res.json();
+
+      if (res.status === 422) {
+        setValidationWarning(data.reason ? `⚠️ ${data.reason}: ${data.details ?? ''}` : 'Este reto no cumple con nuestras normas.');
+        showToast(data.reason ?? 'Contenido no permitido', 'error');
+        return;
+      }
+
       if (!res.ok) throw new Error(data.error || 'Error al crear el reto');
 
       // Show success state inline
+      if (data.challengeId) {
+        await setCurrentChallengeId(data.challengeId);
+      }
       setCreatedCode(data.inviteCode ?? null);
       setDone(true);
       showToast(isPrivate ? `¡Reto creado! Código: ${data.inviteCode}` : '¡Reto creado exitosamente! 🚀');
@@ -61,7 +80,7 @@ export default function CreateChallengeScreen() {
   // Success state after creation
   if (done) {
     return (
-      <SafeAreaView className="flex-1 bg-background justify-center px-8">
+      <SafeAreaView edges={['top', 'left', 'right']} className="flex-1 bg-background justify-center px-8">
         <Toast visible={toast.visible} message={toast.message} type={toast.type} />
         <View className="items-center">
           <Text className="text-7xl mb-6">🚀</Text>
@@ -78,13 +97,22 @@ export default function CreateChallengeScreen() {
 
           <TouchableOpacity
             className="w-full bg-neonGreen py-5 rounded-2xl items-center"
-            onPress={() => router.replace('/(tabs)/dashboard')}
+            onPress={() => void runLeavingAction(() => router.replace('/(tabs)/dashboard'))}
+            disabled={leavingScreen}
           >
-            <Text className="text-black font-black text-lg tracking-widest uppercase">Ir al Dashboard</Text>
+            {leavingScreen ? (
+              <ActivityIndicator color="#000" />
+            ) : (
+              <Text className="text-black font-black text-lg tracking-widest uppercase">Ir al Dashboard</Text>
+            )}
           </TouchableOpacity>
 
           {createdCode && (
-            <TouchableOpacity className="mt-4" onPress={() => router.replace('/(tabs)/explore')}>
+            <TouchableOpacity
+              className="mt-4"
+              onPress={() => void runLeavingAction(() => router.replace('/(tabs)/explore'))}
+              disabled={leavingScreen}
+            >
               <Text className="text-gray-400 text-sm">Volver a Explorar</Text>
             </TouchableOpacity>
           )}
@@ -94,14 +122,23 @@ export default function CreateChallengeScreen() {
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-background">
+    <SafeAreaView edges={['top', 'left', 'right']} className="flex-1 bg-background">
       <Toast visible={toast.visible} message={toast.message} type={toast.type} />
 
-      <View className="px-6 pt-6 pb-4 flex-row items-center border-b border-[#222]">
-        <TouchableOpacity onPress={() => router.back()} className="mr-4">
-          <Text className="text-white text-3xl">‹</Text>
-        </TouchableOpacity>
-        <Text className="text-white text-2xl font-black tracking-widest uppercase">Crear Reto</Text>
+      <View className="px-6 pt-6 pb-4 border-b border-[#222]" style={{ zIndex: 20, elevation: 6 }}>
+        <View className="flex-row items-center" style={{ minHeight: 52 }}>
+          <View style={{ width: 44, marginRight: 12 }}>
+            <HeaderActionButton
+              onPress={() => void runLeavingAction(() => router.back())}
+              disabled={leavingScreen}
+              loading={leavingScreen}
+              icon="‹"
+            />
+          </View>
+          <Text className="text-white text-2xl font-black tracking-widest uppercase flex-1" numberOfLines={1}>
+            Crear Reto
+          </Text>
+        </View>
       </View>
 
       <ScrollView className="flex-1 px-6 pt-8">
@@ -114,6 +151,19 @@ export default function CreateChallengeScreen() {
             placeholderTextColor="#555"
             value={title}
             onChangeText={setTitle}
+          />
+        </View>
+
+        <View className="mb-6">
+          <Text className="text-gray-400 mb-2 text-sm font-bold uppercase tracking-wider">Descripción</Text>
+          <TextInput
+            style={{ backgroundColor: '#1e1e1e', color: 'white', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#333', fontSize: 15, minHeight: 80, textAlignVertical: 'top' }}
+            placeholder="Describe de qué trata el reto..."
+            placeholderTextColor="#555"
+            value={description}
+            onChangeText={setDescription}
+            multiline
+            numberOfLines={3}
           />
         </View>
 
@@ -165,6 +215,13 @@ export default function CreateChallengeScreen() {
             value={isPrivate}
           />
         </View>
+
+        {validationWarning ? (
+          <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 mb-4">
+            <Text className="text-red-400 text-sm font-bold mb-1">Revisa tu reto</Text>
+            <Text className="text-red-300 text-xs">{validationWarning}</Text>
+          </View>
+        ) : null}
 
         <TouchableOpacity
           style={{

@@ -3,6 +3,8 @@ import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform
 import { router } from 'expo-router';
 import { API_URL } from '../constants/api';
 import { setToken } from '../constants/auth';
+import { refreshUnreadCount } from '../constants/notifications';
+import { syncPushTokenWithBackend } from '../hooks/usePushNotifications';
 
 export default function LoginScreen() {
   const [isRegister, setIsRegister] = useState(false);
@@ -36,6 +38,8 @@ export default function LoginScreen() {
 
       // Guardar token de forma segura
       await setToken(data.token);
+      await syncPushTokenWithBackend();
+      await refreshUnreadCount(true);
 
       router.replace('/(tabs)/dashboard');
     } catch (e: any) {

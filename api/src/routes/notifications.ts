@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../db';
 import { notifications } from '../db/schema';
 import { eq, and, desc } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 
 const router = Router();
@@ -18,7 +19,12 @@ router.get('/', authenticateToken, async (req: AuthRequest, res) => {
       .orderBy(desc(notifications.createdAt))
       .limit(50);
 
-    const unreadCount = userNotifications.filter(n => !n.isRead).length;
+    const unreadCountResult = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(notifications)
+      .where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)));
+
+    const unreadCount = Number(unreadCountResult[0]?.count ?? 0);
 
     res.json({ notifications: userNotifications, unreadCount });
   } catch (error) {

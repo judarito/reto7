@@ -1,19 +1,27 @@
-import { View, Text, ScrollView, TouchableOpacity, SafeAreaView, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
-import { useState, useCallback, useRef } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { HealthSyncService } from '../../services/healthSync';
-import { API_URL } from '../../constants/api';
-import { getToken, authHeaders } from '../../constants/auth';
-import { useEffect } from 'react';
+import { API_URL, ApiTimeoutError, fetchWithRetry } from '../../constants/api';
+import { getToken, authHeaders, clearToken } from '../../constants/auth';
+import { setCurrentChallengeId, clearCurrentChallengeId } from '../../constants/challenge';
+import { TabScreen } from '../../components/TabScreen';
+import { TabScrollView } from '../../components/TabScrollView';
 
 interface Challenge {
   challengeId: number;
   title: string;
   durationDays: number;
+  evidenceDescription?: string | null;
   currentStreak: number;
   status: string;
-  isNumeric?: boolean;
+  challengeType: 'steps' | 'reading' | 'nutrition' | 'mindfulness' | 'photo';
+  challengeIcon: string;
+  challengeLabel: string;
+  checkedInToday: boolean;
+  daysRemaining: number;
+  progressPercent: number;
 }
 
 interface UserProfile {
@@ -21,6 +29,8 @@ interface UserProfile {
   totalStreak: number;
   streakFreezesInventory: number;
   activeChallengesCount: number;
+  completedChallengesCount: number;
+  bestStreak: number;
 }
 
 function PulsingFlame() {
@@ -35,7 +45,7 @@ function PulsingFlame() {
       -1,
       false
     );
-  }, []);
+  }, [scale]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
@@ -59,6 +69,7 @@ export default function DashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [syncingId, setSyncingId] = useState<number | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -75,25 +86,35 @@ export default function DashboardScreen() {
       if (!token) { router.replace('/'); return; }
 
       const headers = authHeaders(token);
+      setErrorMessage(null);
       const [challengesRes, profileRes] = await Promise.all([
-        fetch(`${API_URL}/challenges/active`, { headers }),
-        fetch(`${API_URL}/users/me`, { headers }),
+        fetchWithRetry(`${API_URL}/challenges/active`, { headers }),
+        fetchWithRetry(`${API_URL}/users/me`, { headers }),
       ]);
 
-      if (!challengesRes.ok || !profileRes.ok) throw new Error('Failed to fetch');
+      // Sesión expirada o token inválido → volver al login
+      if (challengesRes.status === 401 || challengesRes.status === 403 ||
+          profileRes.status === 401 || profileRes.status === 403) {
+        await clearCurrentChallengeId();
+        await clearToken();
+        router.replace('/');
+        return;
+      }
+
+      if (!challengesRes.ok || !profileRes.ok) {
+        const statusCh = challengesRes.status;
+        const statusPr = profileRes.status;
+        throw new Error(`Failed to fetch (challenges: ${statusCh}, profile: ${statusPr})`);
+      }
 
       const challengesData = await challengesRes.json();
       const profileData = await profileRes.json();
 
-      const enriched = challengesData.map((c: Challenge) => ({
-        ...c,
-        isNumeric: c.title.toLowerCase().includes('paso') || c.title.toLowerCase().includes('step'),
-      }));
-
-      setActiveChallenges(enriched);
+      setActiveChallenges(challengesData);
       setProfile(profileData);
     } catch (e) {
       console.error('Dashboard load error:', e);
+      setErrorMessage(e instanceof ApiTimeoutError ? e.message : 'No se pudo cargar el dashboard.');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -102,27 +123,49 @@ export default function DashboardScreen() {
 
   const handleSync = async (challengeId: number) => {
     setSyncingId(challengeId);
-    await HealthSyncService.syncSteps();
+    await HealthSyncService.syncSteps(challengeId);
     setSyncingId(null);
     loadData();
   };
 
   const handleChallengePress = (challenge: Challenge) => {
-    if (challenge.status === 'broken') { router.push('/paywall'); return; }
+    void setCurrentChallengeId(challenge.challengeId);
+    if (challenge.status === 'broken') {
+      router.push({
+        pathname: '/paywall',
+        params: {
+          challengeId: String(challenge.challengeId),
+          challengeTitle: challenge.title,
+          currentStreak: String(challenge.currentStreak),
+        },
+      });
+      return;
+    }
     router.push(`/challenge/${challenge.challengeId}/leaderboard`);
+  };
+
+  const handleUploadEvidence = (challenge: Challenge) => {
+    void setCurrentChallengeId(challenge.challengeId);
+    router.push({
+      pathname: '/camera',
+      params: {
+        challengeId: String(challenge.challengeId),
+        challengeTitle: challenge.title,
+      },
+    });
   };
 
   if (loading) {
     return (
-      <SafeAreaView className="flex-1 bg-background justify-center items-center">
+      <TabScreen className="flex-1 bg-background justify-center items-center">
         <ActivityIndicator size="large" color="#39FF14" />
-      </SafeAreaView>
+      </TabScreen>
     );
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-background">
-      <ScrollView
+    <TabScreen>
+      <TabScrollView
         className="flex-1 px-6 pt-10"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadData(true)} tintColor="#39FF14" />}
       >
@@ -150,18 +193,28 @@ export default function DashboardScreen() {
           )}
         </View>
 
-        <Text className="text-gray-400 text-sm font-bold tracking-widest uppercase mb-4">Tus Retos Activos</Text>
+        <Text className="text-gray-400 text-sm font-bold tracking-widest uppercase mb-4">Tus Retos</Text>
 
         {activeChallenges.length === 0 ? (
           <View className="bg-[#1A1A1A] rounded-3xl p-8 border border-white/5 items-center">
             <Text className="text-4xl mb-3">🎯</Text>
-            <Text className="text-white font-bold text-lg mb-2">Sin retos todavía</Text>
-            <Text className="text-gray-400 text-sm text-center mb-4">Ve a la pestaña Explorar y únete a tu primer reto</Text>
-            <TouchableOpacity onPress={() => router.push('/(tabs)/explore')}>
-              <View className="bg-neonGreen/20 border border-neonGreen/50 px-6 py-3 rounded-xl">
-                <Text className="text-neonGreen font-black uppercase tracking-widest">Explorar Retos 🔍</Text>
-              </View>
-            </TouchableOpacity>
+            <Text className="text-white font-bold text-lg mb-2">{errorMessage ? 'No pudimos cargar tus retos' : 'Sin retos todavía'}</Text>
+            <Text className="text-gray-400 text-sm text-center mb-4">
+              {errorMessage ? errorMessage : 'Ve a la pestaña Explorar y únete a tu primer reto'}
+            </Text>
+            {errorMessage ? (
+              <TouchableOpacity onPress={() => loadData()}>
+                <View className="bg-neonOrange/20 border border-neonOrange/50 px-6 py-3 rounded-xl">
+                  <Text className="text-neonOrange font-black uppercase tracking-widest">Reintentar</Text>
+                </View>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity onPress={() => router.push('/(tabs)/explore')}>
+                <View className="bg-neonGreen/20 border border-neonGreen/50 px-6 py-3 rounded-xl">
+                  <Text className="text-neonGreen font-black uppercase tracking-widest">Explorar Retos 🔍</Text>
+                </View>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           <View>
@@ -198,25 +251,60 @@ export default function DashboardScreen() {
                   </View>
                 </TouchableOpacity>
 
-                {challenge.status !== 'completed' && !challenge.isNumeric && (
+                <View className="mb-4">
+                  <View className="flex-row justify-between items-center mb-2">
+                    <Text className="text-gray-400 text-xs uppercase tracking-wider">
+                      {challenge.challengeIcon} {challenge.challengeLabel}
+                    </Text>
+                    <Text className="text-gray-500 text-xs">
+                      {challenge.currentStreak}/{challenge.durationDays} días
+                    </Text>
+                  </View>
+                  <View className="h-2 rounded-full bg-[#111] overflow-hidden">
+                    <View
+                      className="h-full bg-neonGreen"
+                      style={{ width: `${challenge.progressPercent}%` }}
+                    />
+                  </View>
+                  <View className="flex-row justify-between items-center mt-2">
+                    <Text className={`text-xs font-bold ${challenge.checkedInToday ? 'text-neonGreen' : 'text-gray-400'}`}>
+                      {challenge.checkedInToday ? 'Check-in de hoy listo' : 'Aún pendiente hoy'}
+                    </Text>
+                    <Text className="text-gray-500 text-xs">
+                      {challenge.daysRemaining} día{challenge.daysRemaining === 1 ? '' : 's'} para completar
+                    </Text>
+                  </View>
+                  {challenge.evidenceDescription ? (
+                    <Text className="text-gray-500 text-xs mt-2" numberOfLines={2}>
+                      {challenge.evidenceDescription}
+                    </Text>
+                  ) : null}
+                </View>
+
+                {challenge.status !== 'completed' && challenge.challengeType !== 'steps' && (
                   <TouchableOpacity
-                    className="w-full bg-white/10 py-3 rounded-2xl items-center border border-white/10"
-                    onPress={() => router.push('/camera')}
+                    className={`w-full py-3 rounded-2xl items-center border ${challenge.checkedInToday ? 'bg-neonGreen/10 border-neonGreen/30' : 'bg-white/10 border-white/10'}`}
+                    onPress={() => handleUploadEvidence(challenge)}
+                    disabled={challenge.checkedInToday}
                   >
-                    <Text className="text-white font-bold tracking-widest uppercase">Subir Prueba 📸</Text>
+                    <Text className={`font-bold tracking-widest uppercase ${challenge.checkedInToday ? 'text-neonGreen' : 'text-white'}`}>
+                      {challenge.checkedInToday ? 'Prueba subida hoy ✅' : 'Subir Prueba 📸'}
+                    </Text>
                   </TouchableOpacity>
                 )}
 
-                {challenge.status !== 'completed' && challenge.isNumeric && (
+                {challenge.status !== 'completed' && challenge.challengeType === 'steps' && (
                   <TouchableOpacity
-                    className="w-full bg-[#111] py-3 rounded-2xl items-center border border-neonGreen/50 flex-row justify-center"
+                    className={`w-full py-3 rounded-2xl items-center border flex-row justify-center ${challenge.checkedInToday ? 'bg-neonGreen/10 border-neonGreen/30' : 'bg-[#111] border-neonGreen/50'}`}
                     onPress={() => handleSync(challenge.challengeId)}
-                    disabled={syncingId === challenge.challengeId}
+                    disabled={syncingId === challenge.challengeId || challenge.checkedInToday}
                   >
                     {syncingId === challenge.challengeId ? (
                       <ActivityIndicator color="#39FF14" />
                     ) : (
-                      <Text className="text-neonGreen font-bold tracking-widest uppercase">Sincronizar Reloj ⌚</Text>
+                      <Text className="text-neonGreen font-bold tracking-widest uppercase">
+                        {challenge.checkedInToday ? 'Pasos sincronizados hoy ✅' : 'Sincronizar Reloj ⌚'}
+                      </Text>
                     )}
                   </TouchableOpacity>
                 )}
@@ -224,8 +312,7 @@ export default function DashboardScreen() {
             ))}
           </View>
         )}
-        <View className="h-10" />
-      </ScrollView>
-    </SafeAreaView>
+      </TabScrollView>
+    </TabScreen>
   );
 }

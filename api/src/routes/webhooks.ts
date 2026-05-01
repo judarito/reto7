@@ -8,7 +8,17 @@ const router = Router();
 // RevenueCat webhook receiver
 router.post('/revenuecat', async (req, res) => {
   try {
-    // Note: In production, verify the webhook signature or bearer token from RevenueCat
+    const configuredAuth = process.env.REVENUECAT_WEBHOOK_AUTH;
+    const authorizationHeader = req.headers.authorization;
+
+    if (!configuredAuth) {
+      return res.status(503).send('RevenueCat webhook auth is not configured');
+    }
+
+    if (authorizationHeader !== `Bearer ${configuredAuth}`) {
+      return res.status(401).send('Unauthorized');
+    }
+
     const event = req.body.event;
 
     if (!event) {

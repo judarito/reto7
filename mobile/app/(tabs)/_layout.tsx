@@ -1,26 +1,16 @@
 import { Tabs, useFocusEffect } from 'expo-router';
 import { Text, View } from 'react-native';
-import { useState, useCallback } from 'react';
-import { API_URL } from '../../constants/api';
-import { getToken, authHeaders } from '../../constants/auth';
+import { useState, useCallback, useEffect } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getUnreadCountSnapshot, refreshUnreadCount, subscribeUnreadCount } from '../../constants/notifications';
 
 function useUnreadNotifications() {
-  const [unread, setUnread] = useState(0);
+  const [unread, setUnread] = useState(getUnreadCountSnapshot());
 
-  const refresh = useCallback(async () => {
-    try {
-      const token = await getToken();
-      if (!token) return;
-      const res = await fetch(`${API_URL}/notifications`, { headers: authHeaders(token) });
-      if (res.ok) {
-        const data = await res.json();
-        setUnread(data.unreadCount ?? 0);
-      }
-    } catch { /* silent */ }
-  }, []);
+  useEffect(() => subscribeUnreadCount(setUnread), []);
 
   // Refresh on every focus of any tab
-  useFocusEffect(useCallback(() => { refresh(); }, [refresh]));
+  useFocusEffect(useCallback(() => { void refreshUnreadCount(); }, []));
 
   return unread;
 }
@@ -45,6 +35,7 @@ function TabBarIcon({ emoji, color, badge }: { emoji: string; color: string; bad
 
 export default function TabLayout() {
   const unreadCount = useUnreadNotifications();
+  const insets = useSafeAreaInsets();
 
   return (
     <Tabs screenOptions={{
@@ -53,9 +44,9 @@ export default function TabLayout() {
         backgroundColor: '#121212',
         borderTopWidth: 1,
         borderTopColor: '#222',
-        paddingBottom: 5,
+        paddingBottom: Math.max(insets.bottom, 8),
         paddingTop: 5,
-        height: 60,
+        height: 60 + Math.max(insets.bottom, 8),
       },
       tabBarActiveTintColor: '#39FF14',
       tabBarInactiveTintColor: '#666',

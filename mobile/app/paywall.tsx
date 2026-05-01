@@ -1,40 +1,68 @@
-import { View, Text, TouchableOpacity, SafeAreaView } from 'react-native';
-import { router } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { View, Text, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
-import { useEffect } from 'react';
-// import Purchases from 'react-native-purchases'; // To be configured with RevenueCat keys
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { API_URL } from '../constants/api';
+import { authHeaders, getToken } from '../constants/auth';
+import { usePendingAction } from '../hooks/usePendingAction';
 
 export default function PaywallScreen() {
   const translateY = useSharedValue(-100);
   const opacity = useSharedValue(0);
+  const params = useLocalSearchParams<{ challengeId?: string; challengeTitle?: string; currentStreak?: string }>();
+  const [loading, setLoading] = useState(false);
+  const { isPending: leavingScreen, runPendingAction: runLeavingAction } = usePendingAction();
 
   useEffect(() => {
     translateY.value = withSpring(0, { damping: 10 });
     opacity.value = withSpring(1);
-  }, []);
+  }, [opacity, translateY]);
 
   const shieldStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: translateY.value }],
     opacity: opacity.value,
   }));
 
-  const handlePurchase = async () => {
+  const handleConsumeFreeze = async () => {
+    const challengeId = Number.parseInt(params.challengeId ?? '', 10);
+    if (Number.isNaN(challengeId)) {
+      Alert.alert('Error', 'No se encontró el reto a restaurar.');
+      return;
+    }
+
     try {
-      /* RevenueCat Logic MVP
-      if (Platform.OS !== 'web') {
-        const purchaseInfo = await Purchases.purchasePackage(packageToBuy);
-        // Backend webhook will automatically credit the freeze
+      setLoading(true);
+      const token = await getToken();
+      if (!token) {
+        router.replace('/');
+        return;
       }
-      */
-      console.log('Mock Purchase successful');
-      router.back();
+
+      const response = await fetch(`${API_URL}/store/consume-freeze`, {
+        method: 'POST',
+        headers: authHeaders(token),
+        body: JSON.stringify({ challengeId }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'No se pudo consumir el escudo');
+      }
+
+      Alert.alert('Escudo usado', `Tu racha de ${params.challengeTitle ?? 'este reto'} quedó protegida.`, [
+        { text: 'Volver al dashboard', onPress: () => router.replace('/(tabs)/dashboard') },
+      ]);
     } catch (e) {
-      console.error(e);
+      const message = e instanceof Error ? e.message : 'No se pudo consumir el escudo';
+      Alert.alert('Error', message);
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-background justify-center px-8">
+    <SafeAreaView edges={['top', 'left', 'right']} className="flex-1 bg-background justify-center px-8">
       
       {/* Broken Flame */}
       <View className="items-center mb-10">
@@ -44,7 +72,9 @@ export default function PaywallScreen() {
         </Text>
         {/* Visual trick for a broken flame could be a slash icon over it, but for text we use a simple broken heart emoji next to it or just the text below */}
         <Text className="text-white text-5xl font-black mt-4 text-center">💔 ¡OH NO!</Text>
-        <Text className="text-gray-400 text-lg mt-3 text-center">Racha de 14 días en peligro.</Text>
+        <Text className="text-gray-400 text-lg mt-3 text-center">
+          {params.currentStreak ? `Tu racha de ${params.currentStreak} días está en peligro.` : 'Tu racha está en peligro.'}
+        </Text>
       </View>
 
       {/* Glossy Shield */}
@@ -57,17 +87,30 @@ export default function PaywallScreen() {
         <Text className="text-gray-300 font-bold text-xl mt-4 uppercase tracking-widest">Escudo de Racha</Text>
       </View>
 
-      {/* Buy Button */}
+      {/* Shield Button */}
       <View className="w-full">
         <TouchableOpacity 
           className="w-full bg-neonOrange py-5 rounded-3xl items-center shadow-[0_0_30px_rgba(255,95,31,0.4)]"
-          onPress={handlePurchase}
+          onPress={handleConsumeFreeze}
+          disabled={loading}
         >
-          <Text className="text-black font-black text-xl tracking-widest uppercase">Comprar por $0.99 USD</Text>
+          {loading ? (
+            <ActivityIndicator color="#000" />
+          ) : (
+            <Text className="text-black font-black text-xl tracking-widest uppercase">Usar Escudo Disponible</Text>
+          )}
         </TouchableOpacity>
 
-        <TouchableOpacity className="mt-6" onPress={() => router.back()}>
-          <Text className="text-gray-500 text-center text-sm font-medium underline">Continuar con mi racha en cero 💀</Text>
+        <TouchableOpacity
+          className="mt-6 items-center"
+          onPress={() => void runLeavingAction(() => router.back())}
+          disabled={leavingScreen}
+        >
+          {leavingScreen ? (
+            <ActivityIndicator color="#9CA3AF" size="small" />
+          ) : (
+            <Text className="text-gray-500 text-center text-sm font-medium underline">Volver sin usar el escudo</Text>
+          )}
         </TouchableOpacity>
       </View>
 
