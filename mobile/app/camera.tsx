@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_URL } from '../constants/api';
@@ -95,6 +96,59 @@ export default function CameraScreen() {
     }
   };
 
+  const pickFromGallery = async () => {
+    const challengeId = Number.parseInt(params.challengeId ?? '', 10);
+    if (Number.isNaN(challengeId)) {
+      Alert.alert('Error', 'Falta el reto para asociar esta evidencia.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.7,
+      allowsEditing: true,
+    });
+
+    if (result.canceled || !result.assets[0]) return;
+
+    try {
+      setUploading(true);
+      const token = await getToken();
+      if (!token) { router.replace('/'); return; }
+
+      const photo = result.assets[0];
+      const formData = new FormData();
+      formData.append('challengeId', String(challengeId));
+      formData.append('photo', {
+        uri: photo.uri,
+        name: `checkin-${Date.now()}.jpg`,
+        type: photo.mimeType || 'image/jpeg',
+      } as any);
+
+      const response = await fetch(`${API_URL}/check-ins/upload`, {
+        method: 'POST',
+        headers: { Authorization: authHeaders(token).Authorization },
+        body: formData,
+      });
+
+      const data = await response.json();
+      if (response.status === 409) {
+        Alert.alert('Check-in ya registrado', 'Ya subiste evidencia para este reto hoy.');
+        return;
+      }
+      if (!response.ok) throw new Error(data.error || 'No se pudo subir la evidencia');
+
+      await setCurrentChallengeId(challengeId);
+      Alert.alert('Check-in listo', `Tu evidencia se subió correctamente.`, [
+        { text: 'Ver tablero', onPress: () => router.replace(`/challenge/${challengeId}/leaderboard`) },
+      ]);
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'No se pudo subir la evidencia');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
     <View className="flex-1 bg-black">
       <CameraView 
@@ -121,15 +175,28 @@ export default function CameraScreen() {
 
         {/* Bottom UI */}
         <View className="absolute w-full items-center" style={{ bottom: Math.max(insets.bottom + 12, 24) }}>
-          <TouchableOpacity 
-            className="w-20 h-20 rounded-full border-4 border-neonOrange justify-center items-center"
-            onPress={takePicture}
-            disabled={uploading}
-          >
-            <View className="w-16 h-16 rounded-full bg-neonOrange items-center justify-center">
-              {uploading ? <ActivityIndicator color="#000" /> : null}
-            </View>
-          </TouchableOpacity>
+          <View className="flex-row items-center gap-8">
+            <TouchableOpacity
+              className="w-16 h-16 rounded-full border-2 border-white/30 justify-center items-center"
+              onPress={pickFromGallery}
+              disabled={uploading}
+            >
+              <Text className="text-white text-2xl">🖼️</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              className="w-20 h-20 rounded-full border-4 border-neonOrange justify-center items-center"
+              onPress={takePicture}
+              disabled={uploading}
+            >
+              <View className="w-16 h-16 rounded-full bg-neonOrange items-center justify-center">
+                {uploading ? <ActivityIndicator color="#000" /> : null}
+              </View>
+            </TouchableOpacity>
+            <View style={{ width: 64 }} />
+          </View>
+          <Text className="text-gray-500 text-[11px] mt-3 font-medium">
+            {uploading ? 'Subiendo...' : '📸 Capturar  •  🖼️ Galería'}
+          </Text>
         </View>
       </CameraView>
     </View>

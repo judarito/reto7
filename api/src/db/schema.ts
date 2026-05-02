@@ -7,8 +7,11 @@ export const users = sqliteTable('users', {
   passwordHash: text('password_hash').notNull(),
   username: text('username').notNull().unique(),
   totalStreak: integer('total_streak').default(0),
-  streakFreezesInventory: integer('streak_freezes_inventory').default(0),
-  pushToken: text('push_token'),
+  streakFreezesInventory: integer('streak_freezes_inventory').default(0),  streakFreezeGoldInventory: integer('streak_freeze_gold_inventory').default(0),
+  streakFreezePlatinumInventory: integer('streak_freeze_platinum_inventory').default(0),  pushToken: text('push_token'),
+  xp: integer('xp').default(0),
+  level: integer('level').default(1),
+  reminderTime: text('reminder_time').default('19:00'), // hora de recordatorio push
 });
 
 export const pushTokens = sqliteTable('push_tokens', {
@@ -102,5 +105,13 @@ export const challengeReports = sqliteTable('challenge_reports', {
   reason: text('reason').notNull(), // 'offensive' | 'dangerous' | 'discriminatory' | 'other'
   details: text('details'),
   isResolved: integer('is_resolved', { mode: 'boolean' }).default(false),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+});
+
+export const checkInComments = sqliteTable('check_in_comments', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  checkInId: integer('check_in_id').notNull().references(() => checkIns.id),
+  userId: integer('user_id').notNull().references(() => users.id),
+  text: text('text').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
 });

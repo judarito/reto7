@@ -427,10 +427,9 @@ router.post('/validate', authenticateToken, async (req: AuthRequest, res) => {
   }
 });
 
-// GET /upcoming — retos programados próximos
-router.get('/upcoming', authenticateToken, async (req: AuthRequest, res) => {
+// GET /upcoming — retos programados próximos (público)
+router.get('/upcoming', async (req, res) => {
   try {
-    const userId = req.user!.id;
     const now = new Date();
 
     const allUsers = await db.select({ id: users.id, username: users.username }).from(users);
@@ -592,6 +591,50 @@ router.patch('/:id/schedule', authenticateToken, validateParams(challengeIdSchem
     }).where(eq(challenges.id, challengeId));
 
     res.json({ message: 'Dates updated', startsAt: effectiveStartsAt, endsAt: effectiveEndsAt });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /:id/analytics — estadísticas del reto (solo creador)
+router.get('/:id/analytics', authenticateToken, validateParams(challengeIdSchema), async (req: AuthRequest, res) => {
+  try {
+    const challengeId = Number(req.params.id as string);
+    const userId = req.user!.id;
+
+    const challengeRecord = await db.select().from(challenges).where(eq(challenges.id, challengeId));
+    if (challengeRecord.length === 0) return res.status(404).json({ error: 'Challenge not found' });
+
+    const allMembers = await db
+      .select({
+        id: users.id,
+        username: users.username,
+        currentStreak: userChallenges.currentStreak,
+        status: userChallenges.status,
+        joinedAt: userChallenges.joinedAt,
+      })
+      .from(userChallenges)
+      .innerJoin(users, eq(userChallenges.userId, users.id))
+      .where(eq(userChallenges.challengeId, challengeId));
+
+    const totalMembers = allMembers.length;
+    const activeMembers = allMembers.filter(m => m.status === 'active').length;
+    const completedMembers = allMembers.filter(m => m.status === 'completed').length;
+    const failedMembers = allMembers.filter(m => m.status === 'failed' || m.status === 'broken');
+    const avgStreak = totalMembers > 0
+      ? Math.round(allMembers.reduce((s, m) => s + (m.currentStreak ?? 0), 0) / totalMembers)
+      : 0;
+
+    res.json({
+      totalMembers,
+      activeMembers,
+      completedMembers,
+      failedMembers: failedMembers.length,
+      avgStreak,
+      maxStreak: Math.max(...allMembers.map(m => m.currentStreak ?? 0), 0),
+      abandonRate: totalMembers > 0 ? Math.round((failedMembers.length / totalMembers) * 100) : 0,
+      completionRate: totalMembers > 0 ? Math.round((completedMembers / totalMembers) * 100) : 0,
+    });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }

@@ -38,13 +38,70 @@ interface ChallengeDetails {
   activeParticipants?: ActiveParticipant[];
 }
 
+interface GlobalRankEntry {
+  rank: number;
+  id: number;
+  username: string;
+  totalStreak: number;
+  level: number;
+  xp: number;
+}
+
+function GlobalRankingList() {
+  const [entries, setEntries] = useState<GlobalRankEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadGlobal();
+  }, []);
+
+  const loadGlobal = async () => {
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const res = await fetch(`${API_URL}/leaderboard/global/list`, { headers: authHeaders(token) });
+      if (res.ok) setEntries(await res.json());
+    } catch { /* silent */ }
+    finally { setLoading(false); }
+  };
+
+  if (loading) return <ActivityIndicator color="#39FF14" size="small" />;
+  if (entries.length === 0) return <Text className="text-gray-500 text-sm">Sin datos aún</Text>;
+
+  return (
+    <View>
+      {entries.slice(0, 10).map((entry) => {
+        const medal = entry.rank === 1 ? '🥇' : entry.rank === 2 ? '🥈' : entry.rank === 3 ? '🥉' : `#${entry.rank}`;
+        return (
+          <TouchableOpacity
+            key={entry.id}
+            className="flex-row items-center py-3 border-b border-white/5"
+            onPress={() => router.push(`/user/${entry.id}`)}
+          >
+            <Text className={`w-8 text-center font-black ${entry.rank <= 3 ? 'text-lg' : 'text-gray-400 text-sm'}`}>{medal}</Text>
+            <Text className="flex-1 text-white font-bold">{entry.username}</Text>
+            <View className="flex-row items-center mr-3">
+              <Text className="text-neonOrange text-sm mr-1">🔥</Text>
+              <Text className="text-white font-black">{entry.totalStreak}</Text>
+            </View>
+            <Text className="text-gray-500 text-xs">⭐{entry.level}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 export default function LeaderboardScreen() {
   const { id } = useLocalSearchParams();
   const [challenge, setChallenge] = useState<ChallengeDetails | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
   const [history, setHistory] = useState<ChallengeHistory | null>(null);
+  const [globalRanking, setGlobalRanking] = useState<GlobalRankEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingGlobal, setLoadingGlobal] = useState(true);
+  const [analytics, setAnalytics] = useState<any>(null);
   const { isPending: leavingScreen, runPendingAction: runLeavingAction } = usePendingAction();
 
   const loadAll = useCallback(async () => {
@@ -59,11 +116,12 @@ export default function LeaderboardScreen() {
 
       const headers = authHeaders(token);
 
-      const [challengeRes, leaderboardRes, meRes, historyRes] = await Promise.all([
+      const [challengeRes, leaderboardRes, meRes, historyRes, analyticsRes] = await Promise.all([
         fetch(`${API_URL}/challenges/${id}`, { headers }),
         fetch(`${API_URL}/leaderboard/${id}`, { headers }),
         fetch(`${API_URL}/users/me`, { headers }),
         fetch(`${API_URL}/challenges/${id}/history`, { headers }),
+        fetch(`${API_URL}/challenges/${id}/analytics`, { headers }),
       ]);
 
       if (challengeRes.ok) setChallenge(await challengeRes.json());
@@ -75,6 +133,7 @@ export default function LeaderboardScreen() {
       if (historyRes.ok) {
         setHistory(await historyRes.json());
       }
+      if (analyticsRes.ok) setAnalytics(await analyticsRes.json());
     } catch (e) {
       console.error('Leaderboard error:', e);
     } finally {
@@ -180,8 +239,9 @@ export default function LeaderboardScreen() {
                   const isMe = participant.id === currentUserId;
 
                   return (
-                    <View
+                    <TouchableOpacity
                       key={participant.id}
+                      onPress={() => router.push(`/user/${participant.id}`)}
                       className={`rounded-full px-3 py-2 mr-2 mb-2 border ${
                         isMe
                           ? 'bg-neonGreen/10 border-neonGreen/30'
@@ -193,7 +253,7 @@ export default function LeaderboardScreen() {
                         {isCreator ? ' • creador' : ''}
                         {isMe ? ' • tú' : ''}
                       </Text>
-                    </View>
+                    </TouchableOpacity>
                   );
                 })}
               </View>
@@ -227,6 +287,39 @@ export default function LeaderboardScreen() {
                 Últimos registros: {history.history.slice(0, 3).map((entry) => new Date(entry.date).toLocaleDateString()).join(' · ') || 'aún sin check-ins'}
               </Text>
             )}
+          </View>
+        )}
+
+        {/* Analytics */}
+        {analytics && (
+          <View className="bg-[#1A1A1A] rounded-2xl p-4 border border-white/5 mb-5">
+            <Text className="text-gray-400 text-xs uppercase tracking-widest mb-3">📊 Estadísticas del reto</Text>
+            <View className="flex-row flex-wrap justify-between">
+              <View className="w-[48%] mb-3">
+                <Text className="text-gray-500 text-[10px] uppercase">Participantes</Text>
+                <Text className="text-white text-lg font-black">{analytics.totalMembers}</Text>
+              </View>
+              <View className="w-[48%] mb-3">
+                <Text className="text-gray-500 text-[10px] uppercase">Activos</Text>
+                <Text className="text-neonGreen text-lg font-black">{analytics.activeMembers}</Text>
+              </View>
+              <View className="w-[48%] mb-3">
+                <Text className="text-gray-500 text-[10px] uppercase">Completados</Text>
+                <Text className="text-white text-lg font-black">{analytics.completedMembers}</Text>
+              </View>
+              <View className="w-[48%] mb-3">
+                <Text className="text-gray-500 text-[10px] uppercase">Abandonaron</Text>
+                <Text className="text-red-400 text-lg font-black">{analytics.failedMembers}</Text>
+              </View>
+              <View className="w-[48%]">
+                <Text className="text-gray-500 text-[10px] uppercase">Racha promedio</Text>
+                <Text className="text-neonOrange text-lg font-black">{analytics.avgStreak} 🔥</Text>
+              </View>
+              <View className="w-[48%]">
+                <Text className="text-gray-500 text-[10px] uppercase">Retención</Text>
+                <Text className="text-neonGreen text-lg font-black">{analytics.completionRate}%</Text>
+              </View>
+            </View>
           </View>
         )}
 
@@ -277,6 +370,16 @@ export default function LeaderboardScreen() {
           </View>
         )}
         <View className="h-10" />
+
+        {/* Ranking Global */}
+        <View className="bg-[#1A1A1A] rounded-3xl p-5 border border-white/5 mb-6">
+          <View className="flex-row items-center mb-3">
+            <Text className="text-2xl mr-2">🌍</Text>
+            <Text className="text-white font-black text-lg uppercase tracking-widest">Ranking Global</Text>
+          </View>
+          <Text className="text-gray-400 text-xs mb-4">Los atletas con la racha más larga de toda la app</Text>
+          <GlobalRankingList />
+        </View>
       </ScrollView>
     </SafeAreaView>
   );

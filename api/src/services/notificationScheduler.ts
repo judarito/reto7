@@ -1,7 +1,7 @@
-import { and, desc, eq, gte } from 'drizzle-orm';
+import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { db } from '../db';
-import { challenges, checkIns, notifications, userChallenges } from '../db/schema';
-import { NotificationTemplates } from './notificationService';
+import { challenges, checkIns, notifications, userChallenges, users } from '../db/schema';
+import { NotificationTemplates, NotificationService } from './notificationService';
 import { deriveChallengeStatus, getDaysSinceLastCheckIn, MembershipStatus } from '../utils/streaks';
 import { getStartOfToday } from '../utils/challenges';
 
@@ -117,6 +117,56 @@ async function sweepStreakDangerNotifications() {
   }
 }
 
+/** Envía recordatorio a usuarios cuya hora configurada coincida con la hora actual */
+async function sweepReminderNotifications() {
+  const now = new Date();
+  const currentHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+  const usersToRemind = await db
+    .select({ id: users.id, username: users.username })
+    .from(users)
+    .where(eq(users.reminderTime, currentHHMM));
+
+  if (usersToRemind.length === 0) return;
+
+  const startOfToday = getStartOfToday();
+  const activeMemberships = await db
+    .select({
+      userId: userChallenges.userId,
+      challengeId: userChallenges.challengeId,
+      challengeTitle: challenges.title,
+    })
+    .from(userChallenges)
+    .innerJoin(challenges, eq(userChallenges.challengeId, challenges.id))
+    .where(eq(userChallenges.status, 'active'));
+
+  for (const user of usersToRemind) {
+    const userChallengesToRemind = activeMemberships.filter(m => m.userId === user.id);
+    if (userChallengesToRemind.length === 0) continue;
+
+    for (const membership of userChallengesToRemind) {
+      const alreadyNotified = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(notifications)
+        .where(and(
+          eq(notifications.userId, user.id),
+          eq(notifications.type, 'nudge'),
+          gte(notifications.createdAt, startOfToday),
+        ));
+
+      if (Number(alreadyNotified[0]?.count ?? 0) > 0) continue;
+
+      await NotificationService.send({
+        userId: user.id,
+        type: 'system',
+        title: '⏰ ¡Hora de check-in!',
+        body: `No olvides hacer check-in en "${membership.challengeTitle}" hoy. ¡Tu racha te espera!`,
+        data: { challengeId: String(membership.challengeId) },
+      });
+    }
+  }
+}
+
 export function startNotificationScheduler() {
   if (process.env.DISABLE_NOTIFICATION_SCHEDULER === 'true') {
     console.log('Notification scheduler disabled via DISABLE_NOTIFICATION_SCHEDULER');
@@ -130,7 +180,10 @@ export function startNotificationScheduler() {
 
   const runSweep = async () => {
     try {
-      await sweepStreakDangerNotifications();
+      await Promise.all([
+        sweepStreakDangerNotifications(),
+        sweepReminderNotifications(),
+      ]);
     } catch (error) {
       console.error('Notification scheduler sweep failed:', error);
     }

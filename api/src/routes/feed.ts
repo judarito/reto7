@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db';
-import { checkIns, nudgeEvents, reactions, userChallenges, users } from '../db/schema';
+import { checkIns, checkInComments, nudgeEvents, reactions, userChallenges, users } from '../db/schema';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { NotificationTemplates } from '../services/notificationService';
@@ -18,6 +18,9 @@ const reactionSchema = z.object({
 const nudgeSchema = z.object({
   targetUserId: z.coerce.number().int().positive(),
   challengeId: z.coerce.number().int().positive(),
+});
+const commentSchema = z.object({
+  text: z.string().trim().min(1).max(500),
 });
 
 async function ensureChallengeMembership(userId: number, challengeId: number) {
@@ -261,6 +264,53 @@ router.post('/nudge', authenticateToken, validateBody(nudgeSchema), async (req: 
     res.json({ message: 'Nudge sent successfully' });
   } catch (error) {
     console.error('Nudge error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// --- Comentarios en check-ins ---
+
+router.get('/:check_in_id/comments', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const checkInId = Number(req.params.check_in_id as string);
+    const comments = await db
+      .select({
+        id: checkInComments.id,
+        text: checkInComments.text,
+        createdAt: checkInComments.createdAt,
+        userId: users.id,
+        username: users.username,
+      })
+      .from(checkInComments)
+      .innerJoin(users, eq(checkInComments.userId, users.id))
+      .where(eq(checkInComments.checkInId, checkInId))
+      .orderBy(desc(checkInComments.createdAt))
+      .limit(50);
+
+    res.json(comments);
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/:check_in_id/comments', authenticateToken, validateBody(commentSchema), async (req: AuthRequest, res) => {
+  try {
+    const checkInId = Number(req.params.check_in_id as string);
+    const userId = req.user!.id;
+    const { text } = req.body;
+
+    const checkIn = await db.select().from(checkIns).where(eq(checkIns.id, checkInId));
+    if (checkIn.length === 0) return res.status(404).json({ error: 'Check-in not found' });
+
+    const newComment = await db.insert(checkInComments).values({
+      checkInId,
+      userId,
+      text: text.trim(),
+      createdAt: new Date(),
+    }).returning();
+
+    res.status(201).json(newComment[0]);
+  } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
 });

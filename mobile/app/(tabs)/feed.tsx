@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { View, Text, ScrollView, Image, ActivityIndicator, RefreshControl, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, Image, ActivityIndicator, RefreshControl, TouchableOpacity, TextInput, Alert } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import ReactionRow from '../../components/ReactionRow';
 import NudgeSection from '../../components/NudgeSection';
@@ -21,6 +21,90 @@ interface FeedPost {
   user: { id: number; username: string };
   reactions: { '🔥': number; '💪': number; '👏': number };
   viewerReactions: { '🔥': boolean; '💪': boolean; '👏': boolean };
+}
+
+interface Comment {
+  id: number;
+  text: string;
+  createdAt: string;
+  userId: number;
+  username: string;
+}
+
+function CommentSection({ checkInId }: { checkInId: number }) {
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [text, setText] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  const loadComments = async () => {
+    setLoading(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const res = await fetch(`${API_URL}/feed/${checkInId}/comments`, { headers: authHeaders(token) });
+      if (res.ok) setComments(await res.json());
+    } catch { /* silent */ }
+    finally { setLoading(false); }
+  };
+
+  const handleToggle = () => {
+    if (!expanded) loadComments();
+    setExpanded(!expanded);
+  };
+
+  const handleSend = async () => {
+    if (!text.trim()) return;
+    setSending(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const res = await fetch(`${API_URL}/feed/${checkInId}/comments`, {
+        method: 'POST',
+        headers: authHeaders(token),
+        body: JSON.stringify({ text: text.trim() }),
+      });
+      if (res.ok) {
+        setText('');
+        loadComments();
+      }
+    } catch { /* silent */ }
+    finally { setSending(false); }
+  };
+
+  return (
+    <View className="border-t border-[#333]">
+      <TouchableOpacity className="p-3" onPress={handleToggle}>
+        <Text className="text-gray-400 text-xs font-bold">
+          💬 {comments.length > 0 ? `${comments.length} comentarios` : 'Comentar'}
+        </Text>
+      </TouchableOpacity>
+      {expanded && (
+        <View className="px-3 pb-3">
+          {loading ? <ActivityIndicator color="#39FF14" size="small" /> : null}
+          {comments.map((c) => (
+            <View key={c.id} className="flex-row mb-2">
+              <Text className="text-neonGreen text-xs font-bold mr-2">@{c.username}</Text>
+              <Text className="text-gray-300 text-xs flex-1">{c.text}</Text>
+            </View>
+          ))}
+          <View className="flex-row items-center mt-2 border border-white/10 rounded-xl overflow-hidden">
+            <TextInput
+              className="flex-1 text-white text-xs p-2"
+              placeholder="Escribe un comentario..."
+              placeholderTextColor="#555"
+              value={text}
+              onChangeText={setText}
+            />
+            <TouchableOpacity className="bg-neonGreen px-4 py-2" onPress={handleSend} disabled={sending || !text.trim()}>
+              <Text className="text-black font-black text-xs">{sending ? '...' : '→'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+    </View>
+  );
 }
 
 export default function FeedScreen() {
@@ -194,9 +278,11 @@ export default function FeedScreen() {
                     <View className="w-6 h-6 rounded-full bg-gray-600 mr-2 justify-center items-center">
                       <Text className="text-[10px]">👤</Text>
                     </View>
-                    <Text className="text-neonGreen text-xs font-bold flex-1" numberOfLines={1}>
-                      {post.user?.username?.toUpperCase() ?? 'ATLETA'}
-                    </Text>
+                    <TouchableOpacity onPress={() => router.push(`/user/${post.user?.id}`)} className="flex-1">
+                      <Text className="text-neonGreen text-xs font-bold" numberOfLines={1}>
+                        {post.user?.username?.toUpperCase() ?? 'ATLETA'}
+                      </Text>
+                    </TouchableOpacity>
                     <Text className="text-gray-500 text-[10px]">
                       {post.createdAt ? formatTime(post.createdAt) : ''}
                     </Text>
@@ -227,6 +313,7 @@ export default function FeedScreen() {
                     initialReactions={post.reactions ?? { '🔥': 0, '💪': 0, '👏': 0 }}
                     initialViewerReactions={post.viewerReactions ?? { '🔥': false, '💪': false, '👏': false }}
                   />
+                  <CommentSection checkInId={post.id} />
                 </View>
               ))}
             </View>

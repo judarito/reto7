@@ -12,13 +12,23 @@ function getFullErrorMessage(error: any): string {
   return parts.join(' | ');
 }
 
+/** Errores de ALTER TABLE que se pueden ignorar (columna ya existe o no soportada) */
+const IGNORED_PATTERNS = [
+  'duplicate column',
+  'already exists',
+  'Cannot add a column with non-constant',
+  'no such column',
+];
+
 async function safeRun(query: string) {
   try {
     await db.run(sql.raw(query));
   } catch (error: any) {
     const msg = getFullErrorMessage(error);
-    if (msg.includes('duplicate column') || msg.includes('already exists')) {
-      return; // La columna/índice ya existe, ignorar silenciosamente
+    for (const pattern of IGNORED_PATTERNS) {
+      if (msg.includes(pattern)) {
+        return; // Ignorar silenciosamente
+      }
     }
     throw error;
   }
@@ -59,8 +69,11 @@ export async function ensureDynamicTables() {
   await safeRun('ALTER TABLE challenges ADD COLUMN starts_at integer');
   await safeRun('ALTER TABLE challenges ADD COLUMN ends_at integer');
   await safeRun('ALTER TABLE challenges ADD COLUMN max_participants integer');
-  await safeRun('ALTER TABLE user_challenges ADD COLUMN joined_at integer NOT NULL DEFAULT (unixepoch())');
-
+  await safeRun("ALTER TABLE user_challenges ADD COLUMN joined_at integer");
+  await safeRun('ALTER TABLE users ADD COLUMN xp integer DEFAULT 0');
+  await safeRun('ALTER TABLE users ADD COLUMN level integer DEFAULT 1');
+  await safeRun("ALTER TABLE users ADD COLUMN reminder_time text DEFAULT '19:00'");  await safeRun('ALTER TABLE users ADD COLUMN streak_freeze_gold_inventory integer DEFAULT 0');
+  await safeRun('ALTER TABLE users ADD COLUMN streak_freeze_platinum_inventory integer DEFAULT 0');
   await db.run(sql`
     CREATE TABLE IF NOT EXISTS shareable_events (
       id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -84,6 +97,18 @@ export async function ensureDynamicTables() {
       created_at integer NOT NULL,
       FOREIGN KEY (challenge_id) REFERENCES challenges(id),
       FOREIGN KEY (reporter_user_id) REFERENCES users(id)
+    )
+  `);
+
+  await db.run(sql`
+    CREATE TABLE IF NOT EXISTS check_in_comments (
+      id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+      check_in_id integer NOT NULL,
+      user_id integer NOT NULL,
+      text text NOT NULL,
+      created_at integer NOT NULL,
+      FOREIGN KEY (check_in_id) REFERENCES check_ins(id),
+      FOREIGN KEY (user_id) REFERENCES users(id)
     )
   `);
 }

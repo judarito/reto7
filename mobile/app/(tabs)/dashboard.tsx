@@ -2,7 +2,6 @@ import { View, Text, TouchableOpacity, ActivityIndicator, RefreshControl } from 
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
-import { HealthSyncService } from '../../services/healthSync';
 import { API_URL, ApiTimeoutError, fetchWithRetry } from '../../constants/api';
 import { getToken, authHeaders, clearToken } from '../../constants/auth';
 import { setCurrentChallengeId, clearCurrentChallengeId } from '../../constants/challenge';
@@ -68,7 +67,6 @@ export default function DashboardScreen() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [syncingId, setSyncingId] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useFocusEffect(
@@ -119,13 +117,6 @@ export default function DashboardScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
-
-  const handleSync = async (challengeId: number) => {
-    setSyncingId(challengeId);
-    await HealthSyncService.syncSteps(challengeId);
-    setSyncingId(null);
-    loadData();
   };
 
   const handleChallengePress = (challenge: Challenge) => {
@@ -281,7 +272,7 @@ export default function DashboardScreen() {
                   ) : null}
                 </View>
 
-                {challenge.status !== 'completed' && challenge.challengeType !== 'steps' && (
+                {challenge.status !== 'completed' && (
                   <TouchableOpacity
                     className={`w-full py-3 rounded-2xl items-center border ${challenge.checkedInToday ? 'bg-neonGreen/10 border-neonGreen/30' : 'bg-white/10 border-white/10'}`}
                     onPress={() => handleUploadEvidence(challenge)}
@@ -290,22 +281,6 @@ export default function DashboardScreen() {
                     <Text className={`font-bold tracking-widest uppercase ${challenge.checkedInToday ? 'text-neonGreen' : 'text-white'}`}>
                       {challenge.checkedInToday ? 'Prueba subida hoy ✅' : 'Subir Prueba 📸'}
                     </Text>
-                  </TouchableOpacity>
-                )}
-
-                {challenge.status !== 'completed' && challenge.challengeType === 'steps' && (
-                  <TouchableOpacity
-                    className={`w-full py-3 rounded-2xl items-center border flex-row justify-center ${challenge.checkedInToday ? 'bg-neonGreen/10 border-neonGreen/30' : 'bg-[#111] border-neonGreen/50'}`}
-                    onPress={() => handleSync(challenge.challengeId)}
-                    disabled={syncingId === challenge.challengeId || challenge.checkedInToday}
-                  >
-                    {syncingId === challenge.challengeId ? (
-                      <ActivityIndicator color="#39FF14" />
-                    ) : (
-                      <Text className="text-neonGreen font-bold tracking-widest uppercase">
-                        {challenge.checkedInToday ? 'Pasos sincronizados hoy ✅' : 'Sincronizar Reloj ⌚'}
-                      </Text>
-                    )}
                   </TouchableOpacity>
                 )}
               </View>
